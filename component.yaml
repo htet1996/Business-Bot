@@ -1,0 +1,10 @@
+schemaVersion: "1.1"
+endpoints:
+  - name: webhook-endpoint
+    displayName: "Telegram Webhook Endpoint"
+    service:
+      basePath: /webhook
+      port: 8080
+    type: REST
+    networkVisibilities:
+      - Public
