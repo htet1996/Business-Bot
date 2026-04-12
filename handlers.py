@@ -212,6 +212,7 @@ async def process_category(message: Message, state: FSMContext):
     await message.answer(f"✅ အောင်မြင်ပါပြီ။\n\n{type_text}: <code>{amount:,.0f} MMK</code>\nCategory: <b>{category}</b>\n📅 {today}", parse_mode="HTML", reply_markup=expense_menu())
     await state.clear()
 
+# ========== EXPORT TO GOOGLE SHEETS ==========
 @router.callback_query(F.data == "exp_excel")
 async def export_excel(callback: CallbackQuery, bot: Bot):
     is_member, _ = await check_channel_membership(callback.from_user.id, bot)

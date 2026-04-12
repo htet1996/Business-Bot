@@ -1,11 +1,27 @@
+# Virtual environment
 venv/
+env/
+ENV/
+
+# Python cache
 __pycache__/
 *.pyc
+
+# Database
 *.db
+*.sqlite
+
+# Environment variables
 .env
-.DS_Store
-*.xlsx
-*.log
-# Google Service Account credentials
+
+# Credentials
 credentials.json
 *.json
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+*.xlsx
