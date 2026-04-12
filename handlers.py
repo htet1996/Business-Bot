@@ -243,7 +243,7 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
             'category': row['category']
         })
     
-    # Export to Google Sheets
+    # ========== EXPORT TO GOOGLE SHEETS (NOT EXCEL) ==========
     sheet_url = export_to_google_sheets(transactions, callback.from_user.id)
     
     if sheet_url:
@@ -252,8 +252,7 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
             f"✅ သင့်ငွေစာရင်းကို Google Sheets သို့ ထုတ်ယူပြီးပါပြီ။\n\n"
             f"📊 ဒေတာများကို ဤနေရာတွင် ကြည့်ရှုနိုင်ပါသည်:\n"
             f"🔗 {sheet_url}\n\n"
-            f"💡 Sheet ကို သင့် Google Drive တွင် သိမ်းဆည်းထားပါသည်။\n"
-            f"📌 သတိပြုရန်: ပထမဆုံးအကြိမ် ဖွင့်ပါက ခွင့်ပြုချက်တောင်းပါက Allow လုပ်ပါ။",
+            f"💡 Sheet ကို သင့် Google Drive တွင် သိမ်းဆည်းထားပါသည်။",
             reply_markup=expense_menu()
         )
     else:
