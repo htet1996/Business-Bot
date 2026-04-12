@@ -23,11 +23,18 @@ SERVICE_ACCOUNT_FILE = "credentials.json"
 
 # သင့် Sheet ရဲ့ ID (URL ထဲက အပိုင်း)
 # ဥပမာ: https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
-SHEET_ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"  # သင့် Sheet ID ထည့်ပါ
+SHEET_ID = "1SxR8Us0QNXCkkcniWjGV18s4yzIbWVxyvOvn5VnvCVs "  # သင့် Sheet ID ထည့်ပါ
 
 def get_sheet():
     """Service Account ကို သုံးပြီး Google Sheet ကို ချိတ်ဆက်ပါ"""
     try:
+        # Check if file exists
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            print(f"❌ ERROR: {SERVICE_ACCOUNT_FILE} not found!")
+            print(f"   Current directory: {os.getcwd()}")
+            print(f"   Files in directory: {os.listdir('.')}")
+            return None
+        
         scope = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -36,7 +43,7 @@ def get_sheet():
         client = gspread.authorize(creds)
         return client.open_by_key(SHEET_ID)
     except Exception as e:
-        print(f"Google Sheets auth error: {e}")
+        print(f"❌ Google Sheets auth error: {e}")
         return None
 
 def export_to_google_sheets(transactions: list, user_id: int) -> str:
@@ -44,23 +51,22 @@ def export_to_google_sheets(transactions: list, user_id: int) -> str:
     try:
         sheet = get_sheet()
         if not sheet:
+            print("❌ Sheet not found!")
             return None
         
         # User အတွက် သီးသန့် Tab (Worksheet) ဖန်တီးပါ
         worksheet_name = f"User_{user_id}"
         try:
             worksheet = sheet.worksheet(worksheet_name)
-            # အဟောင်းတွေကို ရှင်းပါ
             worksheet.clear()
+            print(f"✅ Using existing worksheet: {worksheet_name}")
         except Exception:
-            # မရှိရင် အသစ်ဖန်တီးပါ
             worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
-            # Header ထည့်ပါ
-            headers = ["Date", "Type", "Amount (MMK)", "Category"]
-            worksheet.append_row(headers)
+            print(f"✅ Created new worksheet: {worksheet_name}")
         
-        # Header ပြန်ထည့်ပါ
-        worksheet.append_row(["Date", "Type", "Amount (MMK)", "Category"])
+        # Headers
+        headers = ["Date", "Type", "Amount (MMK)", "Category"]
+        worksheet.append_row(headers)
         
         # ဒေတာတွေ ထည့်ပါ
         for trans in transactions:
@@ -85,10 +91,11 @@ def export_to_google_sheets(transactions: list, user_id: int) -> str:
         worksheet.append_row([])
         worksheet.append_row([f"📅 Generated: {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}", "", "", ""])
         
+        print(f"✅ Google Sheets export successful for user {user_id}")
         return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
         
     except Exception as e:
-        print(f"Google Sheets export error: {e}")
+        print(f"❌ Google Sheets export error: {e}")
         return None
 
 # ========== TRANSLATION ==========
