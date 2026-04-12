@@ -6,3 +6,6 @@ __pycache__/
 .DS_Store
 *.xlsx
 *.log
+# Google Service Account credentials
+credentials.json
+*.json

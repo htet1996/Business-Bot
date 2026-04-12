@@ -11,10 +11,87 @@ import feedparser
 import os
 from aiogram import Bot
 from deep_translator import GoogleTranslator
+import gspread
+from google.oauth2.service_account import Credentials
 
 MM_TZ = pytz.timezone('Asia/Yangon')
 translator = GoogleTranslator(source='en', target='my')
 
+# ========== GOOGLE SHEETS SETUP ==========
+# Service Account JSON ဖိုင် (သင်ဒေါင်းလုဒ်လုပ်ထားတာ)
+SERVICE_ACCOUNT_FILE = "credentials.json"
+
+# သင့် Sheet ရဲ့ ID (URL ထဲက အပိုင်း)
+# ဥပမာ: https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
+SHEET_ID = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"  # သင့် Sheet ID ထည့်ပါ
+
+def get_sheet():
+    """Service Account ကို သုံးပြီး Google Sheet ကို ချိတ်ဆက်ပါ"""
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scope)
+        client = gspread.authorize(creds)
+        return client.open_by_key(SHEET_ID)
+    except Exception as e:
+        print(f"Google Sheets auth error: {e}")
+        return None
+
+def export_to_google_sheets(transactions: list, user_id: int) -> str:
+    """ငွေစာရင်းဒေတာတွေကို Google Sheet ထဲကို ရေးပါ"""
+    try:
+        sheet = get_sheet()
+        if not sheet:
+            return None
+        
+        # User အတွက် သီးသန့် Tab (Worksheet) ဖန်တီးပါ
+        worksheet_name = f"User_{user_id}"
+        try:
+            worksheet = sheet.worksheet(worksheet_name)
+            # အဟောင်းတွေကို ရှင်းပါ
+            worksheet.clear()
+        except Exception:
+            # မရှိရင် အသစ်ဖန်တီးပါ
+            worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
+            # Header ထည့်ပါ
+            headers = ["Date", "Type", "Amount (MMK)", "Category"]
+            worksheet.append_row(headers)
+        
+        # Header ပြန်ထည့်ပါ
+        worksheet.append_row(["Date", "Type", "Amount (MMK)", "Category"])
+        
+        # ဒေတာတွေ ထည့်ပါ
+        for trans in transactions:
+            row = [
+                trans.get('date', ''),
+                trans.get('type', '').capitalize(),
+                trans.get('amount', 0),
+                trans.get('category', '')
+            ]
+            worksheet.append_row(row)
+        
+        # Summary ထည့်ပါ
+        total_income = sum(t['amount'] for t in transactions if t['type'] == 'income')
+        total_expense = sum(t['amount'] for t in transactions if t['type'] == 'expense')
+        balance = total_income - total_expense
+        
+        worksheet.append_row([])
+        worksheet.append_row(["📊 SUMMARY", "", "", ""])
+        worksheet.append_row(["Total Income", "", f"{total_income:,.0f} MMK", ""])
+        worksheet.append_row(["Total Expense", "", f"{total_expense:,.0f} MMK", ""])
+        worksheet.append_row(["Balance", "", f"{balance:,.0f} MMK", ""])
+        worksheet.append_row([])
+        worksheet.append_row([f"📅 Generated: {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}", "", "", ""])
+        
+        return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
+        
+    except Exception as e:
+        print(f"Google Sheets export error: {e}")
+        return None
+
+# ========== TRANSLATION ==========
 async def translate_to_myanmar(text: str) -> str:
     if not text or len(text.strip()) == 0:
         return text
@@ -26,6 +103,7 @@ async def translate_to_myanmar(text: str) -> str:
         print(f"Translation error: {e}")
         return text
 
+# ========== CHART ==========
 def create_expense_chart(data: dict, title: str) -> io.BytesIO:
     if not data:
         return None
@@ -40,6 +118,7 @@ def create_expense_chart(data: dict, title: str) -> io.BytesIO:
     plt.close()
     return buf
 
+# ========== EXCEL EXPORT (Fallback) ==========
 def export_to_excel(transactions: list) -> io.BytesIO:
     try:
         wb = Workbook()
@@ -63,6 +142,7 @@ def export_to_excel(transactions: list) -> io.BytesIO:
     except Exception as e:
         raise Exception(f"Excel export failed: {str(e)}")
 
+# ========== SEND TO CHANNEL ==========
 async def send_to_channel(bot: Bot, message: str):
     channel_id = os.getenv("CHANNEL_ID")
     if channel_id:
@@ -72,6 +152,7 @@ async def send_to_channel(bot: Bot, message: str):
         except Exception as e:
             print(f"❌ Failed to send to channel: {e}")
 
+# ========== FORMATTED MESSAGES ==========
 async def get_formatted_exchange_rates() -> str:
     rates = await get_live_exchange_rates()
     message = "💱 <b>Live Exchange Rates (MMK)</b>\n"
@@ -108,6 +189,7 @@ async def get_formatted_crypto_news_translated() -> str:
     message += f"🕐 {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
     return message
 
+# ========== LIVE CRYPTO PRICES ==========
 async def get_live_crypto_prices():
     try:
         url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,binancecoin,solana,ripple,dogecoin,cardano,avalanche-2,polkadot,polygon&vs_currencies=usd"
@@ -145,6 +227,7 @@ def get_static_crypto_prices():
         {'symbol': 'MATIC', 'name': 'Polygon', 'price': 0.8}
     ]
 
+# ========== LIVE EXCHANGE RATES ==========
 async def get_live_exchange_rates():
     try:
         url = "https://myanmar-currency-api.github.io/api/latest.json"
@@ -172,6 +255,7 @@ def get_static_exchange_rates():
         'CNY': 480, 'KRW': 2.6, 'AED': 950, 'EUR': 3800
     }
 
+# ========== LIVE CRYPTO NEWS ==========
 async def get_live_crypto_news(limit: int = 10):
     try:
         rss_feeds = [
@@ -212,6 +296,7 @@ def get_static_crypto_news():
         {"title": "Binance မှ လုပ်ငန်းသစ်များ မိတ်ဆက်", "source": "Crypto Times", "url": "https://cryptoslate.com", "published_at": ""},
     ]
 
+# ========== TUTORIALS ==========
 TUTORIALS = [
     {"name": "Myan Crypto", "channel": "Crypto Myanmar", "reason": "အခြေခံမှစ၍ ရှင်းလင်းချက်ကောင်း", "url": "https://youtube.com/@myancrypto"},
     {"name": "Blockchain Academy Myanmar", "channel": "Blockchain Academy", "reason": "ပညာဒါန သင်ခန်းစာများ", "url": "https://youtube.com/@blockchainacademy"},
@@ -230,6 +315,7 @@ TUTORIALS = [
     {"name": "Web3 Myanmar", "channel": "Web3 MM", "reason": "Web3 နည်းပညာအကြောင်း", "url": "https://youtube.com/@web3myanmar"},
 ]
 
+# ========== BUDGET STATUS ==========
 def check_budget_status(used: float, limit: float) -> tuple:
     if limit == 0:
         return 0, False

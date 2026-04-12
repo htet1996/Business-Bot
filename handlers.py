@@ -220,26 +220,51 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     
-    msg = await callback.message.edit_text("⏳ Excel ဖိုင်ထုတ်ယူနေပါသည်...")
+    msg = await callback.message.edit_text("⏳ Google Sheets သို့ ထုတ်ယူနေပါသည်...")
+    
     with get_db() as db:
-        rows = db.execute("SELECT date, type, amount, category FROM transactions WHERE user_id = ? ORDER BY date DESC LIMIT 1000", (callback.from_user.id,)).fetchall()
+        rows = db.execute(
+            "SELECT date, type, amount, category FROM transactions WHERE user_id = ? ORDER BY date DESC",
+            (callback.from_user.id,)
+        ).fetchall()
+    
     if not rows:
-        await msg.edit_text("📭 Excel ထုတ်ယူရန် အချက်အလက်မရှိပါ။", reply_markup=expense_menu())
+        await msg.edit_text("📭 ထုတ်ယူရန် အချက်အလက်မရှိပါ။", reply_markup=expense_menu())
         await callback.answer()
         return
-    try:
-        transactions = [{'date': row['date'], 'type': row['type'], 'amount': float(row['amount']), 'category': row['category']} for row in rows]
-        await msg.edit_text("📊 Excel ဖိုင် ဖန်တီးနေပါသည်...")
-        buf = export_to_excel(transactions)
-        if buf:
-            await msg.delete()
-            file = BufferedInputFile(buf.getvalue(), filename=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-            await callback.message.answer_document(file, caption=f"📁 သင့်ရဲ့ငွေစာရင်း Excel ဖိုင်\n\n📊 စုစုပေါင်း {len(transactions)} ခု")
-            await callback.message.answer("✅ Excel ဖိုင်ထုတ်ယူပြီးပါပြီ။", reply_markup=expense_menu())
-        else:
-            await msg.edit_text("❌ Excel ဖိုင်ဖန်တီးရာတွင် အမှားရှိပါသည်။", reply_markup=expense_menu())
-    except Exception as e:
-        await msg.edit_text(f"❌ Excel ထုတ်ယူရာတွင် အမှားရှိပါသည်။\n\nError: {str(e)[:100]}", reply_markup=expense_menu())
+    
+    transactions = []
+    for row in rows:
+        transactions.append({
+            'date': row['date'],
+            'type': row['type'],
+            'amount': float(row['amount']),
+            'category': row['category']
+        })
+    
+    # Export to Google Sheets
+    sheet_url = export_to_google_sheets(transactions, callback.from_user.id)
+    
+    if sheet_url:
+        await msg.delete()
+        await callback.message.answer(
+            f"✅ သင့်ငွေစာရင်းကို Google Sheets သို့ ထုတ်ယူပြီးပါပြီ။\n\n"
+            f"📊 ဒေတာများကို ဤနေရာတွင် ကြည့်ရှုနိုင်ပါသည်:\n"
+            f"🔗 {sheet_url}\n\n"
+            f"💡 Sheet ကို သင့် Google Drive တွင် သိမ်းဆည်းထားပါသည်။\n"
+            f"📌 သတိပြုရန်: ပထမဆုံးအကြိမ် ဖွင့်ပါက ခွင့်ပြုချက်တောင်းပါက Allow လုပ်ပါ။",
+            reply_markup=expense_menu()
+        )
+    else:
+        await msg.edit_text(
+            "❌ Google Sheets သို့ ထုတ်ယူရာတွင် အမှားရှိပါသည်။\n\n"
+            "ကျေးဇူးပြု၍ စစ်ဆေးရန်:\n"
+            "1. `credentials.json` ဖိုင် ရှိမရှိ\n"
+            "2. Service Account Email ကို Sheet သို့ Share ထားခြင်း\n"
+            "3. SHEET_ID မှန်ကန်ခြင်း",
+            reply_markup=expense_menu()
+        )
+    
     await callback.answer()
 
 @router.callback_query(F.data == "exp_budget")
