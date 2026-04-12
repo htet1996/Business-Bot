@@ -5,6 +5,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from datetime import datetime
 import os
+import csv
+import io
 
 from database import get_db, get_dashboard
 from keyboards import (
@@ -212,7 +214,7 @@ async def process_category(message: Message, state: FSMContext):
     await message.answer(f"✅ အောင်မြင်ပါပြီ။\n\n{type_text}: <code>{amount:,.0f} MMK</code>\nCategory: <b>{category}</b>\n📅 {today}", parse_mode="HTML", reply_markup=expense_menu())
     await state.clear()
 
-# ========== EXPORT TO GOOGLE SHEETS ==========
+# ========== EXPORT TO CSV (INSTEAD OF EXCEL/GOOGLE SHEETS) ==========
 @router.callback_query(F.data == "exp_excel")
 async def export_excel(callback: CallbackQuery, bot: Bot):
     is_member, _ = await check_channel_membership(callback.from_user.id, bot)
@@ -221,7 +223,7 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     
-    msg = await callback.message.edit_text("⏳ Google Sheets သို့ ထုတ်ယူနေပါသည်...")
+    msg = await callback.message.edit_text("⏳ CSV ဖိုင်ထုတ်ယူနေပါသည်...")
     
     with get_db() as db:
         rows = db.execute(
@@ -234,36 +236,47 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     
-    transactions = []
-    for row in rows:
-        transactions.append({
-            'date': row['date'],
-            'type': row['type'],
-            'amount': float(row['amount']),
-            'category': row['category']
-        })
-    
-    # ========== EXPORT TO GOOGLE SHEETS (NOT EXCEL) ==========
-    sheet_url = export_to_google_sheets(transactions, callback.from_user.id)
-    
-    if sheet_url:
+    try:
+        # Create CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write headers
+        writer.writerow(["Date", "Type", "Amount (MMK)", "Category"])
+        
+        # Write data
+        for row in rows:
+            writer.writerow([
+                row['date'],
+                row['type'].capitalize(),
+                f"{row['amount']:,.0f}",
+                row['category']
+            ])
+        
+        # Add summary at the end
+        total_income = sum(row['amount'] for row in rows if row['type'] == 'income')
+        total_expense = sum(row['amount'] for row in rows if row['type'] == 'expense')
+        balance = total_income - total_expense
+        
+        writer.writerow([])
+        writer.writerow(["SUMMARY", "", "", ""])
+        writer.writerow(["Total Income", "", f"{total_income:,.0f}", ""])
+        writer.writerow(["Total Expense", "", f"{total_expense:,.0f}", ""])
+        writer.writerow(["Balance", "", f"{balance:,.0f}", ""])
+        writer.writerow([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "", "", ""])
+        
+        # Convert to bytes with UTF-8 BOM (for Excel compatibility)
+        csv_bytes = io.BytesIO(output.getvalue().encode('utf-8-sig'))
+        
         await msg.delete()
-        await callback.message.answer(
-            f"✅ သင့်ငွေစာရင်းကို Google Sheets သို့ ထုတ်ယူပြီးပါပြီ။\n\n"
-            f"📊 ဒေတာများကို ဤနေရာတွင် ကြည့်ရှုနိုင်ပါသည်:\n"
-            f"🔗 {sheet_url}\n\n"
-            f"💡 Sheet ကို သင့် Google Drive တွင် သိမ်းဆည်းထားပါသည်။",
-            reply_markup=expense_menu()
+        await callback.message.answer_document(
+            BufferedInputFile(csv_bytes.getvalue(), filename=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"),
+            caption=f"📁 သင့်ငွေစာရင်း CSV ဖိုင်\n\n📊 စုစုပေါင်း {len(rows)} ခု\n\n💡 Excel နဲ့ဖွင့်လို့ရပါသည်။"
         )
-    else:
-        await msg.edit_text(
-            "❌ Google Sheets သို့ ထုတ်ယူရာတွင် အမှားရှိပါသည်။\n\n"
-            "ကျေးဇူးပြု၍ စစ်ဆေးရန်:\n"
-            "1. `credentials.json` ဖိုင် ရှိမရှိ\n"
-            "2. Service Account Email ကို Sheet သို့ Share ထားခြင်း\n"
-            "3. SHEET_ID မှန်ကန်ခြင်း",
-            reply_markup=expense_menu()
-        )
+        await callback.message.answer("✅ CSV ဖိုင်ထုတ်ယူပြီးပါပြီ။", reply_markup=expense_menu())
+        
+    except Exception as e:
+        await msg.edit_text(f"❌ CSV ထုတ်ယူရာတွင် အမှားရှိပါသည်။\n\nError: {str(e)[:100]}", reply_markup=expense_menu())
     
     await callback.answer()
 

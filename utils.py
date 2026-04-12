@@ -11,92 +11,9 @@ import feedparser
 import os
 from aiogram import Bot
 from deep_translator import GoogleTranslator
-import gspread
-from google.oauth2.service_account import Credentials
 
 MM_TZ = pytz.timezone('Asia/Yangon')
 translator = GoogleTranslator(source='en', target='my')
-
-# ========== GOOGLE SHEETS SETUP ==========
-# Service Account JSON ဖိုင် (သင်ဒေါင်းလုဒ်လုပ်ထားတာ)
-SERVICE_ACCOUNT_FILE = "credentials.json"
-
-# သင့် Sheet ရဲ့ ID (URL ထဲက အပိုင်း)
-# ဥပမာ: https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
-SHEET_ID = "1SxR8Us0QNXCkkcniWjGV18s4yzIbWVxyvOvn5VnvCVs "  # သင့် Sheet ID ထည့်ပါ
-
-def get_sheet():
-    """Service Account ကို သုံးပြီး Google Sheet ကို ချိတ်ဆက်ပါ"""
-    try:
-        # Check if file exists
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            print(f"❌ ERROR: {SERVICE_ACCOUNT_FILE} not found!")
-            print(f"   Current directory: {os.getcwd()}")
-            print(f"   Files in directory: {os.listdir('.')}")
-            return None
-        
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scope)
-        client = gspread.authorize(creds)
-        return client.open_by_key(SHEET_ID)
-    except Exception as e:
-        print(f"❌ Google Sheets auth error: {e}")
-        return None
-
-def export_to_google_sheets(transactions: list, user_id: int) -> str:
-    """ငွေစာရင်းဒေတာတွေကို Google Sheet ထဲကို ရေးပါ"""
-    try:
-        sheet = get_sheet()
-        if not sheet:
-            print("❌ Sheet not found!")
-            return None
-        
-        # User အတွက် သီးသန့် Tab (Worksheet) ဖန်တီးပါ
-        worksheet_name = f"User_{user_id}"
-        try:
-            worksheet = sheet.worksheet(worksheet_name)
-            worksheet.clear()
-            print(f"✅ Using existing worksheet: {worksheet_name}")
-        except Exception:
-            worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
-            print(f"✅ Created new worksheet: {worksheet_name}")
-        
-        # Headers
-        headers = ["Date", "Type", "Amount (MMK)", "Category"]
-        worksheet.append_row(headers)
-        
-        # ဒေတာတွေ ထည့်ပါ
-        for trans in transactions:
-            row = [
-                trans.get('date', ''),
-                trans.get('type', '').capitalize(),
-                trans.get('amount', 0),
-                trans.get('category', '')
-            ]
-            worksheet.append_row(row)
-        
-        # Summary ထည့်ပါ
-        total_income = sum(t['amount'] for t in transactions if t['type'] == 'income')
-        total_expense = sum(t['amount'] for t in transactions if t['type'] == 'expense')
-        balance = total_income - total_expense
-        
-        worksheet.append_row([])
-        worksheet.append_row(["📊 SUMMARY", "", "", ""])
-        worksheet.append_row(["Total Income", "", f"{total_income:,.0f} MMK", ""])
-        worksheet.append_row(["Total Expense", "", f"{total_expense:,.0f} MMK", ""])
-        worksheet.append_row(["Balance", "", f"{balance:,.0f} MMK", ""])
-        worksheet.append_row([])
-        worksheet.append_row([f"📅 Generated: {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}", "", "", ""])
-        
-        print(f"✅ Google Sheets export successful for user {user_id}")
-        return f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
-        
-    except Exception as e:
-        print(f"❌ Google Sheets export error: {e}")
-        return None
 
 # ========== TRANSLATION ==========
 async def translate_to_myanmar(text: str) -> str:
@@ -125,7 +42,7 @@ def create_expense_chart(data: dict, title: str) -> io.BytesIO:
     plt.close()
     return buf
 
-# ========== EXCEL EXPORT (Fallback) ==========
+# ========== EXCEL EXPORT ==========
 def export_to_excel(transactions: list) -> io.BytesIO:
     try:
         wb = Workbook()
