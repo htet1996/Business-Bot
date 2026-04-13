@@ -36,14 +36,14 @@ async def post_crypto_news(bot):
         logging.error(f"❌ Failed to post crypto news: {e}")
 
 def setup_scheduler(bot):
-    scheduler.add_job(post_exchange_rates, IntervalTrigger(hours=2), args=[bot], id="exchange_rates", replace_existing=True)
-    scheduler.add_job(post_crypto_prices, IntervalTrigger(minutes=45), args=[bot], id="crypto_prices", replace_existing=True)
-    scheduler.add_job(post_crypto_news, IntervalTrigger(hours=3, minutes=30), args=[bot], id="crypto_news", replace_existing=True)
+    scheduler.add_job(post_exchange_rates, IntervalTrigger(minutes=30), args=[bot], id="exchange_rates", replace_existing=True)
+    scheduler.add_job(post_crypto_prices, IntervalTrigger(minutes=25), args=[bot], id="crypto_prices", replace_existing=True)
+    scheduler.add_job(post_crypto_news, IntervalTrigger(hours=1, minutes=30), args=[bot], id="crypto_news", replace_existing=True)
     scheduler.start()
     
     logging.info("=" * 50)
     logging.info("✅ Auto-posting scheduler started!")
-    logging.info("💱 Exchange rates: every 2 hours")
-    logging.info("₿ Crypto prices: every 45 minutes")
-    logging.info("📰 Crypto news: every 3 hours 30 minutes (Myanmar)")
+    logging.info("💱 Exchange rates: every 30 minutes")
+    logging.info("₿ Crypto prices: every 25 minutes")
+    logging.info("📰 Crypto news: every 1 hours 30 minutes (Myanmar)")
     logging.info("=" * 50)
