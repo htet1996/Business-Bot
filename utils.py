@@ -1,3 +1,4 @@
+# utils.py - Full Code (No static fallback, live RSS only with timeout)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -9,57 +10,90 @@ import aiohttp
 import asyncio
 import feedparser
 import os
+import csv
 from aiogram import Bot
 from deep_translator import GoogleTranslator
 
 MM_TZ = pytz.timezone('Asia/Yangon')
 translator = GoogleTranslator(source='en', target='my')
 
-# ========== EXCHANGE RATES WITH MARKET RATE API ==========
-EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY")
-
+# ========== MYANMAR CURRENCY API ONLY ==========
 async def get_live_exchange_rates():
-    """Get real-time market exchange rates from ExchangeRate-API"""
+    """
+    Get exchange rates from Myanmar Currency API (CBM Reference Rate)
+    """
     try:
-        if not EXCHANGE_API_KEY:
-            print("⚠️ EXCHANGE_API_KEY not found in environment variables")
-            return get_static_exchange_rates()
-        
-        url = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_API_KEY}/latest/USD"
+        url = "https://myanmar-currency-api.github.io/api/latest.json"
         
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
-                    rates = data.get('conversion_rates', {})
                     
-                    # Extract required currencies
-                    result = {}
-                    currencies = ['USD', 'SGD', 'THB', 'JPY', 'CNY', 'KRW', 'AED', 'EUR']
-                    for curr in currencies:
-                        if curr in rates:
-                            result[curr] = rates[curr]
+                    rates = {}
+                    for item in data.get('data', []):
+                        currency = item.get('currency', '')
+                        if currency in ['USD', 'SGD', 'THB', 'JPY', 'CNY', 'KRW', 'AED', 'EUR']:
+                            rates[currency] = float(item.get('sell', 0))
                     
-                    # Add MMK
-                    if 'MMK' in rates:
-                        result['MMK'] = rates['MMK']
+                    if 'AED' not in rates and 'USD' in rates:
+                        rates['AED'] = rates['USD'] * 3.67
+                    if 'KRW' not in rates and 'USD' in rates:
+                        rates['KRW'] = rates['USD'] / 1300
                     
-                    print(f"✅ Live exchange rates fetched at {datetime.now()}")
-                    return result
+                    rates['MMK'] = 1
+                    
+                    print(f"✅ Myanmar Currency API rates fetched at {datetime.now()}")
+                    return rates
                 else:
                     print(f"❌ API returned status {response.status}")
-                    return get_static_exchange_rates()
+                    raise Exception(f"API returned {response.status}")
+                    
     except Exception as e:
-        print(f"❌ Exchange rate API error: {e}")
-        return get_static_exchange_rates()
+        print(f"❌ Failed to fetch exchange rates: {e}")
+        raise Exception(f"Cannot fetch exchange rates: {e}")
 
-def get_static_exchange_rates():
-    """Fallback static exchange rates"""
-    return {
-        'USD': 3500, 'SGD': 2600, 'THB': 100, 'JPY': 23,
-        'CNY': 480, 'KRW': 2.6, 'AED': 950, 'EUR': 3800,
-        'MMK': 1
-    }
+# ========== LIVE CRYPTO NEWS WITH TIMEOUT ==========
+async def get_live_crypto_news(limit: int = 5):
+    """Get latest crypto news from RSS feeds with timeout"""
+    try:
+        rss_feeds = [
+            "https://cointelegraph.com/rss",
+            "https://cryptoslate.com/feed/",
+            "https://decrypt.co/feed",
+        ]
+        all_news = []
+        
+        for feed_url in rss_feeds:
+            try:
+                # Parse RSS with timeout
+                loop = asyncio.get_event_loop()
+                feed = await asyncio.wait_for(
+                    loop.run_in_executor(None, feedparser.parse, feed_url),
+                    timeout=5
+                )
+                for entry in feed.entries[:2]:
+                    all_news.append({
+                        'title': entry.get('title', 'No Title'),
+                        'source': feed.feed.get('title', 'Unknown'),
+                        'url': entry.get('link', '#'),
+                        'published_at': entry.get('published', '')
+                    })
+            except asyncio.TimeoutError:
+                print(f"⚠️ Timeout for {feed_url}")
+                continue
+            except Exception as e:
+                print(f"⚠️ Error for {feed_url}: {e}")
+                continue
+        
+        if all_news:
+            return all_news[:limit]
+        else:
+            raise Exception("No news available from RSS feeds")
+            
+    except Exception as e:
+        print(f"RSS news error: {e}")
+        raise Exception(f"Cannot fetch crypto news: {e}")
 
 # ========== TRANSLATION ==========
 async def translate_to_myanmar(text: str) -> str:
@@ -112,6 +146,30 @@ def export_to_excel(transactions: list) -> io.BytesIO:
     except Exception as e:
         raise Exception(f"Excel export failed: {str(e)}")
 
+# ========== CSV EXPORT ==========
+def export_to_csv(transactions: list) -> io.BytesIO:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Type", "Amount (MMK)", "Category"])
+    for trans in transactions:
+        writer.writerow([
+            trans.get('date', ''),
+            trans.get('type', '').capitalize(),
+            trans.get('amount', 0),
+            trans.get('category', '')
+        ])
+    total_income = sum(t['amount'] for t in transactions if t['type'] == 'income')
+    total_expense = sum(t['amount'] for t in transactions if t['type'] == 'expense')
+    balance = total_income - total_expense
+    writer.writerow([])
+    writer.writerow(["SUMMARY", "", "", ""])
+    writer.writerow(["Total Income", "", f"{total_income:,.0f}", ""])
+    writer.writerow(["Total Expense", "", f"{total_expense:,.0f}", ""])
+    writer.writerow(["Balance", "", f"{balance:,.0f}", ""])
+    
+    csv_bytes = io.BytesIO(output.getvalue().encode('utf-8-sig'))
+    return csv_bytes
+
 # ========== SEND TO CHANNEL ==========
 async def send_to_channel(bot: Bot, message: str):
     channel_id = os.getenv("CHANNEL_ID")
@@ -129,10 +187,7 @@ async def get_formatted_exchange_rates() -> str:
     message += "━━━━━━━━━━━━━━━━━━━━━━━\n"
     for curr, rate in rates.items():
         if curr != 'MMK':
-            mmk_rate = rate * rates.get('MMK', 1) if 'MMK' in rates else rate * 3500
-            message += f"• 1 {curr} = <code>{mmk_rate:,.0f} MMK</code>\n"
-        else:
-            message += f"• 1 MMK = <code>1 MMK</code>\n"
+            message += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
     message += "━━━━━━━━━━━━━━━━━━━━━━━\n"
     message += f"🕐 {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
     return message
@@ -185,62 +240,7 @@ async def get_live_crypto_prices():
                     ]
     except Exception as e:
         print(f"Crypto API error: {e}")
-        return get_static_crypto_prices()
-
-def get_static_crypto_prices():
-    return [
-        {'symbol': 'BTC', 'name': 'Bitcoin', 'price': 65000},
-        {'symbol': 'ETH', 'name': 'Ethereum', 'price': 3500},
-        {'symbol': 'BNB', 'name': 'Binance Coin', 'price': 600},
-        {'symbol': 'SOL', 'name': 'Solana', 'price': 180},
-        {'symbol': 'XRP', 'name': 'Ripple', 'price': 0.6},
-        {'symbol': 'DOGE', 'name': 'Dogecoin', 'price': 0.15},
-        {'symbol': 'ADA', 'name': 'Cardano', 'price': 0.45},
-        {'symbol': 'AVAX', 'name': 'Avalanche', 'price': 35},
-        {'symbol': 'DOT', 'name': 'Polkadot', 'price': 7},
-        {'symbol': 'MATIC', 'name': 'Polygon', 'price': 0.8}
-    ]
-
-# ========== LIVE CRYPTO NEWS ==========
-async def get_live_crypto_news(limit: int = 10):
-    try:
-        rss_feeds = [
-            "https://cointelegraph.com/rss",
-            "https://www.coindesk.com/arc/outboundfeeds/rss/",
-            "https://cryptoslate.com/feed/",
-            "https://decrypt.co/feed",
-            "https://u.today/rss",
-            "https://news.bitcoin.com/feed/",
-        ]
-        all_news = []
-        for feed_url in rss_feeds:
-            try:
-                feed = feedparser.parse(feed_url)
-                for entry in feed.entries[:3]:
-                    all_news.append({
-                        'title': entry.get('title', 'No Title'),
-                        'source': feed.feed.get('title', 'Unknown'),
-                        'url': entry.get('link', '#'),
-                        'published_at': entry.get('published', '')
-                    })
-            except Exception as e:
-                print(f"RSS feed error for {feed_url}: {e}")
-                continue
-        all_news = all_news[:limit]
-        if all_news:
-            return all_news
-        else:
-            return get_static_crypto_news()
-    except Exception as e:
-        print(f"RSS news error: {e}")
-        return get_static_crypto_news()
-
-def get_static_crypto_news():
-    return [
-        {"title": "Bitcoin ETF များ ထပ်မံခွင့်ပြု", "source": "Crypto News", "url": "https://cointelegraph.com", "published_at": ""},
-        {"title": "Ethereum 2.0 Upgrade ပြီးစီး", "source": "Blockchain Journal", "url": "https://coindesk.com", "published_at": ""},
-        {"title": "Binance မှ လုပ်ငန်းသစ်များ မိတ်ဆက်", "source": "Crypto Times", "url": "https://cryptoslate.com", "published_at": ""},
-    ]
+        raise Exception("Failed to fetch crypto prices")
 
 # ========== TUTORIALS ==========
 TUTORIALS = [

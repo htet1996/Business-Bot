@@ -1,3 +1,4 @@
+# handlers.py - Full Code (No static news fallback)
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
@@ -5,8 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.filters import Command
 from datetime import datetime
 import os
-import csv
-import io
+import asyncio
 
 from database import get_db, get_dashboard
 from keyboards import (
@@ -32,7 +32,6 @@ previous_rates = {}
 
 # ========== FORCE JOIN CHANNEL FUNCTIONS ==========
 async def check_channel_membership(user_id: int, bot: Bot) -> tuple:
-    """Check if user is a member of the channel"""
     try:
         member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         is_member = member.status in ['member', 'creator', 'administrator']
@@ -42,7 +41,6 @@ async def check_channel_membership(user_id: int, bot: Bot) -> tuple:
         return False, str(e)
 
 async def ask_to_join_channel(message: Message, bot: Bot):
-    """Send message asking user to join channel"""
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📢 Join Channel", url=CHANNEL_LINK)],
         [InlineKeyboardButton(text="✅ I've Joined", callback_data="check_joined")]
@@ -59,12 +57,10 @@ async def ask_to_join_channel(message: Message, bot: Bot):
 
 @router.callback_query(F.data == "check_joined")
 async def check_joined(callback: CallbackQuery, bot: Bot):
-    """Check if user has joined after clicking button"""
     user_id = callback.from_user.id
     is_member, _ = await check_channel_membership(user_id, bot)
     
     if is_member:
-        # Add user to database
         with get_db() as db:
             db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
         
@@ -86,14 +82,12 @@ async def check_joined(callback: CallbackQuery, bot: Bot):
 async def cmd_start(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
     
-    # Check if user joined channel
     is_member, _ = await check_channel_membership(message.from_user.id, bot)
     
     if not is_member:
         await ask_to_join_channel(message, bot)
         return
     
-    # User is member, proceed normally
     with get_db() as db:
         db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (message.from_user.id,))
     
@@ -214,7 +208,7 @@ async def process_category(message: Message, state: FSMContext):
     await message.answer(f"✅ အောင်မြင်ပါပြီ။\n\n{type_text}: <code>{amount:,.0f} MMK</code>\nCategory: <b>{category}</b>\n📅 {today}", parse_mode="HTML", reply_markup=expense_menu())
     await state.clear()
 
-# ========== EXPORT TO CSV (INSTEAD OF EXCEL/GOOGLE SHEETS) ==========
+# ========== EXPORT TO CSV ==========
 @router.callback_query(F.data == "exp_excel")
 async def export_excel(callback: CallbackQuery, bot: Bot):
     is_member, _ = await check_channel_membership(callback.from_user.id, bot)
@@ -236,48 +230,23 @@ async def export_excel(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     
-    try:
-        # Create CSV content
-        output = io.StringIO()
-        writer = csv.writer(output)
-        
-        # Write headers
-        writer.writerow(["Date", "Type", "Amount (MMK)", "Category"])
-        
-        # Write data
-        for row in rows:
-            writer.writerow([
-                row['date'],
-                row['type'].capitalize(),
-                f"{row['amount']:,.0f}",
-                row['category']
-            ])
-        
-        # Add summary at the end
-        total_income = sum(row['amount'] for row in rows if row['type'] == 'income')
-        total_expense = sum(row['amount'] for row in rows if row['type'] == 'expense')
-        balance = total_income - total_expense
-        
-        writer.writerow([])
-        writer.writerow(["SUMMARY", "", "", ""])
-        writer.writerow(["Total Income", "", f"{total_income:,.0f}", ""])
-        writer.writerow(["Total Expense", "", f"{total_expense:,.0f}", ""])
-        writer.writerow(["Balance", "", f"{balance:,.0f}", ""])
-        writer.writerow([f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", "", "", ""])
-        
-        # Convert to bytes with UTF-8 BOM (for Excel compatibility)
-        csv_bytes = io.BytesIO(output.getvalue().encode('utf-8-sig'))
-        
-        await msg.delete()
-        await callback.message.answer_document(
-            BufferedInputFile(csv_bytes.getvalue(), filename=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"),
-            caption=f"📁 သင့်ငွေစာရင်း CSV ဖိုင်\n\n📊 စုစုပေါင်း {len(rows)} ခု\n\n💡 Excel နဲ့ဖွင့်လို့ရပါသည်။"
-        )
-        await callback.message.answer("✅ CSV ဖိုင်ထုတ်ယူပြီးပါပြီ။", reply_markup=expense_menu())
-        
-    except Exception as e:
-        await msg.edit_text(f"❌ CSV ထုတ်ယူရာတွင် အမှားရှိပါသည်။\n\nError: {str(e)[:100]}", reply_markup=expense_menu())
+    transactions = []
+    for row in rows:
+        transactions.append({
+            'date': row['date'],
+            'type': row['type'],
+            'amount': float(row['amount']),
+            'category': row['category']
+        })
     
+    csv_bytes = export_to_csv(transactions)
+    
+    await msg.delete()
+    await callback.message.answer_document(
+        BufferedInputFile(csv_bytes.getvalue(), filename=f"transactions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"),
+        caption=f"📁 သင့်ငွေစာရင်း CSV ဖိုင်\n\n📊 စုစုပေါင်း {len(rows)} ခု\n\n💡 Excel နဲ့ဖွင့်လို့ရပါသည်။"
+    )
+    await callback.message.answer("✅ CSV ဖိုင်ထုတ်ယူပြီးပါပြီ။", reply_markup=expense_menu())
     await callback.answer()
 
 @router.callback_query(F.data == "exp_budget")
@@ -341,16 +310,28 @@ async def currency_menu(callback: CallbackQuery, bot: Bot):
         return
     
     msg = await callback.message.edit_text("⏳ ငွေလဲနှုန်းများ ရယူနေပါသည်...")
-    rates = await get_live_exchange_rates()
-    with get_db() as db:
-        user = db.execute("SELECT notify_rate FROM users WHERE user_id = ?", (callback.from_user.id,)).fetchone()
-        notify_on = user['notify_rate'] if user else 0
-    text = "💱 <b>Live ငွေလဲနှုန်းများ (MMK)</b>\n\n"
-    for curr, rate in rates.items():
-        text += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
-    text += "\n📌 ငွေကြေးတစ်ခုချင်းစီကို နှိပ်၍ copy လုပ်နိုင်ပါသည်။\n"
-    text += f"\n🔔 Rate Alert: {'ON' if notify_on else 'OFF'}\n"
-    await msg.edit_text(text, parse_mode="HTML", reply_markup=currency_menu_keyboard())
+    
+    try:
+        rates = await get_live_exchange_rates()
+        
+        text = "💱 <b>Live Exchange Rates (MMK)</b>\n"
+        text += "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        for curr, rate in rates.items():
+            if curr != 'MMK':
+                text += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
+        text += "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        text += f"🕐 {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n"
+        text += "\n📌 ငွေကြေးတစ်ခုချင်းစီကို နှိပ်၍ copy လုပ်နိုင်ပါသည်။\n"
+        
+        with get_db() as db:
+            user = db.execute("SELECT notify_rate FROM users WHERE user_id = ?", (callback.from_user.id,)).fetchone()
+            notify_on = user['notify_rate'] if user else 0
+        text += f"\n🔔 Rate Alert: {'ON' if notify_on else 'OFF'}\n"
+        
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=currency_menu_keyboard())
+    except Exception as e:
+        await msg.edit_text(f"❌ ငွေလဲနှုန်းများ ရယူရာတွင် အမှားရှိပါသည်။\n\n{str(e)}", reply_markup=currency_menu_keyboard())
+    
     await callback.answer()
 
 @router.callback_query(F.data.startswith("currency_"))
@@ -358,9 +339,12 @@ async def show_currency_rate(callback: CallbackQuery):
     currency = callback.data.split("_")[1]
     if currency in ['alert']:
         return
-    rates = await get_live_exchange_rates()
-    rate = rates.get(currency, 0)
-    await callback.answer(f"💱 1 {currency} = {rate:,.0f} MMK", show_alert=True)
+    try:
+        rates = await get_live_exchange_rates()
+        rate = rates.get(currency, 0)
+        await callback.answer(f"💱 1 {currency} = {rate:,.0f} MMK", show_alert=True)
+    except:
+        await callback.answer("❌ Rate unavailable", show_alert=True)
 
 @router.callback_query(F.data == "check_rates_now")
 async def check_rates_now(callback: CallbackQuery, bot: Bot):
@@ -371,33 +355,54 @@ async def check_rates_now(callback: CallbackQuery, bot: Bot):
         return
     
     msg = await callback.message.edit_text("⏳ ငွေလဲနှုန်းများ စစ်ဆေးနေပါသည်...")
+    
     try:
         current_rates = await get_live_exchange_rates()
+        
         user_id = callback.from_user.id
         with get_db() as db:
             notify = db.execute("SELECT notify_rate FROM users WHERE user_id = ?", (user_id,)).fetchone()
             notify_on = notify['notify_rate'] if notify else 0
+        
         global previous_rates
         old_rates = previous_rates.get(user_id, {})
         changes = []
+        
         for currency, new_rate in current_rates.items():
+            if currency == 'MMK':
+                continue
             old_rate = old_rates.get(currency, new_rate)
             if old_rate > 0:
                 percent_change = abs((new_rate - old_rate) / old_rate * 100)
                 if percent_change >= 2:
                     changes.append(f"• {currency}: {old_rate:,.0f} → {new_rate:,.0f} ({percent_change:.1f}%)")
+        
         previous_rates[user_id] = current_rates
-        text = "💱 <b>လက်ရှိငွေလဲနှုန်းများ (MMK)</b>\n\n"
+        
+        text = "💱 <b>လက်ရှိငွေလဲနှုန်းများ (MMK)</b>\n"
+        text += "━━━━━━━━━━━━━━━━━━━━━━━\n"
         for curr, rate in current_rates.items():
-            text += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
+            if curr != 'MMK':
+                text += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
+        text += "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
         if changes:
             text += "\n🔔 <b>သိသိသာသာပြောင်းလဲမှုများ:</b>\n" + "\n".join(changes)
+            if notify_on:
+                await callback.message.answer(
+                    "🔔 <b>Rate Alert!</b>\n\n" + "\n".join(changes) + "\n\nငွေလဲနှုန်းများ သိသိသာသာ ပြောင်းလဲသွားပါပြီ။",
+                    parse_mode="HTML"
+                )
         else:
             text += "\n✅ သိသိသာသာ ပြောင်းလဲမှု မရှိပါ။"
+        
         text += f"\n\n🔔 Rate Alert: {'ON' if notify_on else 'OFF'}"
+        
         await msg.edit_text(text, parse_mode="HTML", reply_markup=currency_menu_keyboard())
+        
     except Exception as e:
-        await msg.edit_text("❌ ငွေလဲနှုန်းများ စစ်ဆေးရာတွင် အမှားရှိပါသည်။", reply_markup=currency_menu_keyboard())
+        await msg.edit_text(f"❌ ငွေလဲနှုန်းများ စစ်ဆေးရာတွင် အမှားရှိပါသည်။\n\n{str(e)}", reply_markup=currency_menu_keyboard())
+    
     await callback.answer()
 
 @router.callback_query(F.data == "toggle_rate_alert")
@@ -412,6 +417,7 @@ async def toggle_rate_alert(callback: CallbackQuery, bot: Bot):
         current = db.execute("SELECT notify_rate FROM users WHERE user_id = ?", (callback.from_user.id,)).fetchone()
         new_value = 0 if current and current['notify_rate'] else 1
         db.execute("UPDATE users SET notify_rate = ? WHERE user_id = ?", (new_value, callback.from_user.id))
+    
     status = "ON" if new_value else "OFF"
     await callback.answer(f"✅ Rate Alert {status}", show_alert=True)
     await currency_menu(callback, bot)
@@ -447,6 +453,7 @@ async def show_crypto_prices(callback: CallbackQuery, bot: Bot):
     await msg.edit_text(text, parse_mode="HTML", reply_markup=crypto_menu_keyboard())
     await callback.answer()
 
+# ========== CRYPTO NEWS ==========
 @router.callback_query(F.data == "crypto_news")
 async def show_crypto_news(callback: CallbackQuery, bot: Bot):
     is_member, _ = await check_channel_membership(callback.from_user.id, bot)
@@ -455,15 +462,37 @@ async def show_crypto_news(callback: CallbackQuery, bot: Bot):
         await callback.answer()
         return
     
-    msg = await callback.message.edit_text("⏳ Crypto သတင်းများ ရယူနေပါသည်...")
-    news_list = await get_live_crypto_news(limit=5)
-    text = "📰 <b>နောက်ဆုံး Crypto သတင်းများ</b>\n\n"
-    for i, news in enumerate(news_list, 1):
-        title = await translate_to_myanmar(news['title'])
-        text += f"{i}. <b>{title}</b>\n"
-        text += f"   📌 {news['source']}\n"
-        text += f"   🔗 <a href='{news['url']}'>အသေးစိတ်ဖတ်ရန်</a>\n\n"
-    await msg.edit_text(text, parse_mode="HTML", reply_markup=crypto_menu_keyboard(), disable_web_page_preview=True)
+    msg = await callback.message.edit_text("⏳ Crypto သတင်းများ ရယူနေပါသည်... ကျေးဇူးပြု၍ စောင့်ပါ...")
+    
+    try:
+        # Set timeout for news fetching (10 seconds max)
+        news_list = await asyncio.wait_for(get_live_crypto_news(limit=5), timeout=10)
+        
+        text = "📰 <b>နောက်ဆုံး Crypto သတင်းများ</b>\n\n"
+        for i, news in enumerate(news_list, 1):
+            title = await translate_to_myanmar(news['title'])
+            text += f"{i}. <b>{title[:80]}</b>\n"
+            text += f"   📌 {news['source']}\n"
+            if news.get('published_at'):
+                text += f"   🕐 {news['published_at'][:16]}\n"
+            text += f"   🔗 <a href='{news['url']}'>အသေးစိတ်ဖတ်ရန်</a>\n\n"
+        
+        text += "\n<code>🔄 RSS Feeds မှ တိုက်ရိုက်ရယူထားပါသည်။</code>"
+        
+        await msg.edit_text(text, parse_mode="HTML", reply_markup=crypto_menu_keyboard(), disable_web_page_preview=True)
+        
+    except asyncio.TimeoutError:
+        await msg.edit_text(
+            "⏰ သတင်းရယူရန် အချိန်လွန်သွားပါသည်။\n\n"
+            "ကျေးဇူးပြု၍ နောက်မှထပ်ကြိုးစားပါ။",
+            reply_markup=crypto_menu_keyboard()
+        )
+    except Exception as e:
+        await msg.edit_text(
+            f"❌ သတင်းများ ရယူရာတွင် အမှားရှိပါသည်။\n\n{str(e)[:100]}",
+            reply_markup=crypto_menu_keyboard()
+        )
+    
     await callback.answer()
 
 # ========== TUTORIAL ==========
