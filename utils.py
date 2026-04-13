@@ -15,6 +15,52 @@ from deep_translator import GoogleTranslator
 MM_TZ = pytz.timezone('Asia/Yangon')
 translator = GoogleTranslator(source='en', target='my')
 
+# ========== EXCHANGE RATES WITH MARKET RATE API ==========
+EXCHANGE_API_KEY = os.getenv("EXCHANGE_API_KEY")
+
+async def get_live_exchange_rates():
+    """Get real-time market exchange rates from ExchangeRate-API"""
+    try:
+        if not EXCHANGE_API_KEY:
+            print("⚠️ EXCHANGE_API_KEY not found in environment variables")
+            return get_static_exchange_rates()
+        
+        url = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_API_KEY}/latest/USD"
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    rates = data.get('conversion_rates', {})
+                    
+                    # Extract required currencies
+                    result = {}
+                    currencies = ['USD', 'SGD', 'THB', 'JPY', 'CNY', 'KRW', 'AED', 'EUR']
+                    for curr in currencies:
+                        if curr in rates:
+                            result[curr] = rates[curr]
+                    
+                    # Add MMK
+                    if 'MMK' in rates:
+                        result['MMK'] = rates['MMK']
+                    
+                    print(f"✅ Live exchange rates fetched at {datetime.now()}")
+                    return result
+                else:
+                    print(f"❌ API returned status {response.status}")
+                    return get_static_exchange_rates()
+    except Exception as e:
+        print(f"❌ Exchange rate API error: {e}")
+        return get_static_exchange_rates()
+
+def get_static_exchange_rates():
+    """Fallback static exchange rates"""
+    return {
+        'USD': 3500, 'SGD': 2600, 'THB': 100, 'JPY': 23,
+        'CNY': 480, 'KRW': 2.6, 'AED': 950, 'EUR': 3800,
+        'MMK': 1
+    }
+
 # ========== TRANSLATION ==========
 async def translate_to_myanmar(text: str) -> str:
     if not text or len(text.strip()) == 0:
@@ -82,7 +128,11 @@ async def get_formatted_exchange_rates() -> str:
     message = "💱 <b>Live Exchange Rates (MMK)</b>\n"
     message += "━━━━━━━━━━━━━━━━━━━━━━━\n"
     for curr, rate in rates.items():
-        message += f"• 1 {curr} = <code>{rate:,.0f} MMK</code>\n"
+        if curr != 'MMK':
+            mmk_rate = rate * rates.get('MMK', 1) if 'MMK' in rates else rate * 3500
+            message += f"• 1 {curr} = <code>{mmk_rate:,.0f} MMK</code>\n"
+        else:
+            message += f"• 1 MMK = <code>1 MMK</code>\n"
     message += "━━━━━━━━━━━━━━━━━━━━━━━\n"
     message += f"🕐 {datetime.now(MM_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
     return message
@@ -150,34 +200,6 @@ def get_static_crypto_prices():
         {'symbol': 'DOT', 'name': 'Polkadot', 'price': 7},
         {'symbol': 'MATIC', 'name': 'Polygon', 'price': 0.8}
     ]
-
-# ========== LIVE EXCHANGE RATES ==========
-async def get_live_exchange_rates():
-    try:
-        url = "https://myanmar-currency-api.github.io/api/latest.json"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    rates = {}
-                    for item in data.get('data', []):
-                        currency = item.get('currency', '')
-                        if currency in ['USD', 'SGD', 'THB', 'JPY', 'CNY', 'KRW', 'AED', 'EUR']:
-                            rates[currency] = float(item.get('sell', 0))
-                    if 'AED' not in rates and 'USD' in rates:
-                        rates['AED'] = rates['USD'] * 3.67
-                    if 'KRW' not in rates and 'USD' in rates:
-                        rates['KRW'] = rates['USD'] / 1300
-                    return rates
-    except Exception as e:
-        print(f"Exchange rate API error: {e}")
-        return get_static_exchange_rates()
-
-def get_static_exchange_rates():
-    return {
-        'USD': 3500, 'SGD': 2600, 'THB': 100, 'JPY': 23,
-        'CNY': 480, 'KRW': 2.6, 'AED': 950, 'EUR': 3800
-    }
 
 # ========== LIVE CRYPTO NEWS ==========
 async def get_live_crypto_news(limit: int = 10):
